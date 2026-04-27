@@ -52,7 +52,7 @@ DATABASES = {
     }
 }
 
-# CORS — allow all origins for demo; restrict in production
+# TODO: tighten CORS before going to prod
 CORS_ALLOW_ALL_ORIGINS = True
 
 # Static files

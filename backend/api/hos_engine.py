@@ -1,46 +1,31 @@
-"""
-FMCSA Hours of Service Engine
-Property-carrying driver, 70 hr / 8-day cycle.
-Rules implemented:
-  - 11-hour driving limit per shift
-  - 14-hour driving window
-  - 30-minute break after 8 cumulative driving hours
-  - 10 consecutive hours off between shifts
-  - 70-hour / 8-day rolling cycle limit
-  - Fuel stop every 1,000 miles (30 min on-duty)
-  - 1 hour on-duty (not driving) for pickup and dropoff
-  - 34-hour cycle restart when cycle limit reached
-"""
+# HOS engine for property carriers, 70hr/8-day cycle.
+# See 49 CFR 395 for the actual rules — the 34hr restart section is a pain.
+# Fueling every 1000mi is an assumption, real carriers vary a lot.
 
 import requests
 from datetime import datetime, timedelta
 
-# ── External APIs (no API key needed) ─────────────────────────────
+# nominatim for geocoding, osrm for routing — both free, no key needed
+# osrm public server is slow sometimes, don't hammer it
 NOMINATIM = "https://nominatim.openstreetmap.org/search"
 OSRM      = "http://router.project-osrm.org/route/v1/driving"
 
-# ── HOS Constants ─────────────────────────────────────────────────
-MAX_DRIVING  = 11.0   # max driving hours per shift
-DRIVE_WINDOW = 14.0   # driving window hours
-BREAK_AFTER  = 8.0    # cumulative driving hours before mandatory 30-min break
-BREAK_DUR    = 0.5    # 30-minute break duration
-MIN_REST     = 10.0   # minimum consecutive off-duty rest hours
-CYCLE_LIMIT  = 70.0   # 70-hr / 8-day cycle
-FUEL_MILES   = 1000.0 # miles between fueling stops
-FUEL_STOP    = 0.5    # fueling stop duration (hours)
-STOP_DUR     = 1.0    # pickup / dropoff stop duration (hours)
+MAX_DRIVING  = 11.0
+DRIVE_WINDOW = 14.0
+BREAK_AFTER  = 8.0   # 30min break required after this many driving hours
+BREAK_DUR    = 0.5
+MIN_REST     = 10.0
+CYCLE_LIMIT  = 70.0
+FUEL_MILES   = 1000.0
+FUEL_STOP    = 0.5
+STOP_DUR     = 1.0   # assuming 1hr for pickup/dropoff, could be more realistically
 
-
-# ─────────────────────────────────────────────────────────────────
-# Helpers
-# ─────────────────────────────────────────────────────────────────
 
 def _mi(meters: float) -> float:
     return meters / 1609.344
 
 
 def geocode(loc: str):
-    """Return (lat, lon, display_name). Raises ValueError on failure."""
     try:
         r = requests.get(
             NOMINATIM,
@@ -51,18 +36,15 @@ def geocode(loc: str):
         r.raise_for_status()
         data = r.json()
         if not data:
-            raise ValueError(f"Location not found: '{loc}'. Try a more specific address (city, state).")
+            raise ValueError(f"couldn't find '{loc}' — try adding a state or country")
         item = data[0]
         return float(item["lat"]), float(item["lon"]), item.get("display_name", loc)
     except requests.RequestException as exc:
-        raise ValueError(f"Geocoding request failed: {exc}")
+        raise ValueError(f"geocoding failed: {exc}")
 
 
 def get_route(start: tuple, end: tuple):
-    """
-    Return (distance_miles, duration_hours, [[lat,lon],...]).
-    Uses OSRM public demo server — no API key required.
-    """
+    # returns (miles, hours, [[lat,lon],...]) or raises ValueError
     if start == end:
         return 0.0, 0.0, []
     lat1, lon1 = start
@@ -77,7 +59,7 @@ def get_route(start: tuple, end: tuple):
         r.raise_for_status()
         data = r.json()
         if data.get("code") != "Ok":
-            raise ValueError(f"OSRM routing error: {data.get('message', 'unknown')}")
+            raise ValueError(f"routing failed: {data.get('message', 'unknown')}")
         route = data["routes"][0]
         miles = _mi(route["distance"])
         hours = route["duration"] / 3600
@@ -85,26 +67,15 @@ def get_route(start: tuple, end: tuple):
         geom = [[c[1], c[0]] for c in route["geometry"]["coordinates"]]
         return miles, hours, geom
     except requests.RequestException as exc:
-        raise ValueError(f"Routing request failed: {exc}")
+        raise ValueError(f"routing request failed: {exc}")
 
-
-# ─────────────────────────────────────────────────────────────────
-# Main planner
-# ─────────────────────────────────────────────────────────────────
 
 def plan_trip(current_location: str, pickup_location: str,
               dropoff_location: str, cycle_hours_used: float) -> dict:
-    """
-    Compute a complete HOS-compliant trip plan.
-    Returns a dict with locations, route geometry, daily ELD logs,
-    trip summary, and notable stops.
-    """
-    # ── Geocode ───────────────────────────────────────────────────
     clat, clon, cname = geocode(current_location)
     plat, plon, pname = geocode(pickup_location)
     dlat, dlon, dname = geocode(dropoff_location)
 
-    # ── Route legs ────────────────────────────────────────────────
     d1, t1, g1 = get_route((clat, clon), (plat, plon))
     d2, t2, g2 = get_route((plat, plon), (dlat, dlon))
 
@@ -112,24 +83,22 @@ def plan_trip(current_location: str, pickup_location: str,
     spd1 = max(d1 / t1, 10.0) if t1 > 0 else 55.0
     spd2 = max(d2 / t2, 10.0) if t2 > 0 else 55.0
 
-    # ── Simulation state ──────────────────────────────────────────
+    # simulate starting at 8am tomorrow
     start_dt = datetime.now().replace(hour=8, minute=0, second=0, microsecond=0)
     if start_dt <= datetime.now():
         start_dt += timedelta(days=1)
 
     st = {
         "now":       start_dt,
-        "drv_shift": 0.0,          # driving hours this shift
-        "drv_break": 0.0,          # driving hours since last 30-min break
-        "win_start": None,          # 14-hr window start (datetime or None)
+        "drv_shift": 0.0,
+        "drv_break": 0.0,
+        "win_start": None,
         "cycle":     float(cycle_hours_used),
         "fuel_mi":   0.0,
         "total_mi":  0.0,
     }
 
     events: list[dict] = []
-
-    # ── Event helpers ─────────────────────────────────────────────
 
     def _add(status, s, e, location, reason="", miles=0.0):
         events.append({
@@ -158,7 +127,7 @@ def plan_trip(current_location: str, pickup_location: str,
             st["drv_break"] = 0.0
             st["win_start"] = None
         else:
-            # Short break — still counts toward 14-hr window (clock keeps running)
+            # short break, 14hr window clock keeps ticking
             st["drv_break"] = 0.0
         if hours >= 34:
             st["cycle"] = 0.0
@@ -174,7 +143,6 @@ def plan_trip(current_location: str, pickup_location: str,
             st["win_start"] = s
 
     def _drive(dist_mi: float, speed_mph: float, from_n: str, to_n: str):
-        """Drive dist_mi miles at speed_mph, inserting HOS breaks/rests as needed."""
         remaining = dist_mi
         guard = 0
 
@@ -183,7 +151,6 @@ def plan_trip(current_location: str, pickup_location: str,
             if guard > 5000:
                 break  # safety
 
-            # ── Enforce mandatory limits ──────────────────────────
             need_rest = False
 
             if st["drv_shift"] >= MAX_DRIVING - 0.001:
@@ -205,7 +172,6 @@ def plan_trip(current_location: str, pickup_location: str,
             if need_rest:
                 continue
 
-            # ── Fuel stop ─────────────────────────────────────────
             if st["fuel_mi"] >= FUEL_MILES - 0.01:
                 s = st["now"]
                 e = s + timedelta(hours=FUEL_STOP)
@@ -218,11 +184,10 @@ def plan_trip(current_location: str, pickup_location: str,
                     st["win_start"] = s
                 continue
 
-            # ── Start 14-hr window if not yet started ────────────
             if st["win_start"] is None:
                 st["win_start"] = st["now"]
 
-            # ── How far can we drive before hitting any limit? ────
+            # how far until we hit something
             we = _win_elapsed()
             h_drive  = MAX_DRIVING  - st["drv_shift"]
             h_win    = DRIVE_WINDOW - we
@@ -252,7 +217,6 @@ def plan_trip(current_location: str, pickup_location: str,
             st["total_mi"]  += chunk_mi
             remaining       -= chunk_mi
 
-    # ── Execute the trip ──────────────────────────────────────────
     cn = cname.split(",")[0]
     pn = pname.split(",")[0]
     dn = dname.split(",")[0]
@@ -265,7 +229,6 @@ def plan_trip(current_location: str, pickup_location: str,
         _drive(d2, spd2, pn, dn)
     _on_duty_stop(STOP_DUR, dn, "Dropoff")
 
-    # ── Build response ────────────────────────────────────────────
     daily_logs = _make_daily_logs(events, start_dt)
 
     return {
@@ -290,10 +253,6 @@ def plan_trip(current_location: str, pickup_location: str,
         "stops":      _extract_stops(events),
     }
 
-
-# ─────────────────────────────────────────────────────────────────
-# Daily log generation
-# ─────────────────────────────────────────────────────────────────
 
 def _make_daily_logs(events: list, start_dt: datetime) -> list:
     if not events:
@@ -362,10 +321,9 @@ def _make_daily_logs(events: list, start_dt: datetime) -> list:
             day = next_day
             continue
 
-        # Sort events in time order
         day_evts.sort(key=lambda x: x["start_hour"])
 
-        # Fill off-duty gap at start of day
+        # pad off-duty at start
         if day_evts[0]["start_hour"] > 0.001:
             gap = day_evts[0]["start_hour"]
             day_evts.insert(0, {
@@ -378,7 +336,7 @@ def _make_daily_logs(events: list, start_dt: datetime) -> list:
             })
             totals["OFF_DUTY"] = round(totals["OFF_DUTY"] + gap, 4)
 
-        # Fill off-duty gap at end of day
+        # pad off-duty at end
         last_eh = day_evts[-1]["end_hour"]
         if last_eh < 23.999:
             gap = 24.0 - last_eh
