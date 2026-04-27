@@ -18,7 +18,6 @@ export default function MapView({ locations, geometry, stops }) {
   const mapObjRef  = useRef(null)
   const layersRef  = useRef([])
 
-  // ── Initialize map once ───────────────────────────────────────
   useEffect(() => {
     if (mapObjRef.current) return
 
@@ -55,7 +54,6 @@ export default function MapView({ locations, geometry, stops }) {
     initMap()
   }, [])
 
-  // ── Render data whenever it changes ──────────────────────────
   useEffect(() => {
     if (!mapObjRef.current || !L) return
     if (!geometry || geometry.length === 0) return

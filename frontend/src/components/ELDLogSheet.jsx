@@ -1,6 +1,5 @@
 import { useRef, useEffect, useCallback } from 'react'
 
-/* ── Status → grid row mapping ─────────────────────────────────── */
 const ROW = {
   OFF_DUTY:            0,
   SLEEPER_BERTH:       1,
@@ -22,13 +21,12 @@ const STATUS_LABELS = {
   ON_DUTY_NOT_DRIVING: 'On Duty (Not Driving)',
 }
 
-/* ── Hour labels across the grid ──────────────────────────────── */
 const HOUR_LABELS = [
   'Mid-\nnight','1','2','3','4','5','6','7','8','9','10','11',
   'Noon','1','2','3','4','5','6','7','8','9','10','11','Mid-\nnight',
 ]
 
-/* ── Canvas layout constants ──────────────────────────────────── */
+// canvas layout
 const CW = 940   // canvas width
 const CH = 530   // canvas height
 
@@ -54,12 +52,10 @@ const GBTM     = GTOP + RH * 4              // grid bottom y
 const RMK_TOP  = GBTM + 6
 const RMK_H    = CH - RMK_TOP - 10
 
-/* ── Coordinate helpers ───────────────────────────────────────── */
 const tx = (h)  => GLFT + (h / 24) * GW          // hour → x
 const ry = (r)  => GTOP + r * RH                  // row  → y (top of row)
 const rcy = (r) => ry(r) + RH / 2                 // row  → y (centre)
 
-/* ── Drawing utilities ────────────────────────────────────────── */
 function line(ctx, x1, y1, x2, y2, color = '#000', w = 1) {
   ctx.save()
   ctx.strokeStyle = color

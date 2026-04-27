@@ -38,7 +38,6 @@ export default function App() {
 
   return (
     <div className="app">
-      {/* ── Header ─────────────────────────────────────────── */}
       <header className="app-header">
         <div className="header-inner">
           <div className="header-logo">
@@ -56,10 +55,8 @@ export default function App() {
       </header>
 
       <main className="app-main">
-        {/* ── Input Form ──────────────────────────────────── */}
         <TripForm onSubmit={handleSubmit} loading={loading} />
 
-        {/* ── Error ───────────────────────────────────────── */}
         {error && (
           <div className="error-banner">
             <span>⚠️</span>
@@ -67,7 +64,6 @@ export default function App() {
           </div>
         )}
 
-        {/* ── Loading ─────────────────────────────────────── */}
         {loading && (
           <div className="loading-box">
             <div className="spinner" />
@@ -75,7 +71,6 @@ export default function App() {
           </div>
         )}
 
-        {/* ── Results ─────────────────────────────────────── */}
         {tripData && (
           <div id="results" className="results-section">
             <TripSummary
