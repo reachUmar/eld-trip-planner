@@ -2,6 +2,7 @@
 # See 49 CFR 395 for the actual rules — the 34hr restart section is a pain.
 # Fueling every 1000mi is an assumption, real carriers vary a lot.
 
+import time
 import requests
 from datetime import datetime, timedelta
 
@@ -26,21 +27,28 @@ def _mi(meters: float) -> float:
 
 
 def geocode(loc: str):
-    try:
-        r = requests.get(
-            NOMINATIM,
-            params={"q": loc, "format": "json", "limit": 1},
-            headers={"User-Agent": "ELDTripPlanner/1.0 (demo)"},
-            timeout=12,
-        )
-        r.raise_for_status()
-        data = r.json()
-        if not data:
-            raise ValueError(f"couldn't find '{loc}' — try adding a state or country")
-        item = data[0]
-        return float(item["lat"]), float(item["lon"]), item.get("display_name", loc)
-    except requests.RequestException as exc:
-        raise ValueError(f"geocoding failed: {exc}")
+    for attempt in range(3):
+        try:
+            r = requests.get(
+                NOMINATIM,
+                params={"q": loc, "format": "json", "limit": 1},
+                headers={"User-Agent": "ELDTripPlanner/1.0 (demo)"},
+                timeout=12,
+            )
+            if r.status_code == 429:
+                time.sleep(2 ** attempt)
+                continue
+            r.raise_for_status()
+            data = r.json()
+            if not data:
+                raise ValueError(f"couldn't find '{loc}' — try adding a state or country")
+            item = data[0]
+            return float(item["lat"]), float(item["lon"]), item.get("display_name", loc)
+        except requests.RequestException as exc:
+            if attempt == 2:
+                raise ValueError(f"geocoding failed: {exc}")
+            time.sleep(1)
+    raise ValueError(f"geocoding failed for '{loc}' after retries")
 
 
 def get_route(start: tuple, end: tuple):
@@ -73,7 +81,9 @@ def get_route(start: tuple, end: tuple):
 def plan_trip(current_location: str, pickup_location: str,
               dropoff_location: str, cycle_hours_used: float) -> dict:
     clat, clon, cname = geocode(current_location)
+    time.sleep(1)
     plat, plon, pname = geocode(pickup_location)
+    time.sleep(1)
     dlat, dlon, dname = geocode(dropoff_location)
 
     d1, t1, g1 = get_route((clat, clon), (plat, plon))
