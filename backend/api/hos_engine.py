@@ -6,9 +6,9 @@ import time
 import requests
 from datetime import datetime, timedelta
 
-# photon for geocoding (nominatim was rate-limiting the server), osrm for routing
-PHOTON = "https://photon.komoot.io/api/"
-OSRM   = "http://router.project-osrm.org/route/v1/driving"
+# open-meteo geocoding (free, no key, no rate limits), osrm for routing
+GEOCODE_URL = "https://geocoding-api.open-meteo.com/v1/search"
+OSRM        = "http://router.project-osrm.org/route/v1/driving"
 
 MAX_DRIVING  = 11.0
 DRIVE_WINDOW = 14.0
@@ -26,21 +26,28 @@ def _mi(meters: float) -> float:
 
 
 def geocode(loc: str):
+    # strip state suffix for the name param — open-meteo doesn't like "Chicago,IL"
+    name = loc.split(",")[0].strip()
     try:
         r = requests.get(
-            PHOTON,
-            params={"q": loc, "limit": 1},
+            GEOCODE_URL,
+            params={"name": name, "count": 5, "language": "en", "format": "json"},
             timeout=12,
         )
         r.raise_for_status()
-        data = r.json()
-        features = data.get("features", [])
-        if not features:
-            raise ValueError(f"couldn't find '{loc}' — try adding a state or country")
-        coords = features[0]["geometry"]["coordinates"]
-        props = features[0]["properties"]
-        name = ", ".join(filter(None, [props.get("name"), props.get("state"), props.get("country")]))
-        return float(coords[1]), float(coords[0]), name or loc
+        results = r.json().get("results", [])
+        if not results:
+            raise ValueError(f"couldn't find '{loc}' — try a city name")
+        # if state given, try to match it
+        state = loc.split(",")[1].strip().lower() if "," in loc else ""
+        match = results[0]
+        if state:
+            for res in results:
+                if state in (res.get("admin1") or "").lower() or state in (res.get("country_code") or "").lower():
+                    match = res
+                    break
+        name_str = ", ".join(filter(None, [match.get("name"), match.get("admin1"), match.get("country")]))
+        return float(match["latitude"]), float(match["longitude"]), name_str
     except requests.RequestException as exc:
         raise ValueError(f"geocoding failed: {exc}")
 
