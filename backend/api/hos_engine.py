@@ -6,10 +6,9 @@ import time
 import requests
 from datetime import datetime, timedelta
 
-# nominatim for geocoding, osrm for routing — both free, no key needed
-# osrm public server is slow sometimes, don't hammer it
-NOMINATIM = "https://nominatim.openstreetmap.org/search"
-OSRM      = "http://router.project-osrm.org/route/v1/driving"
+# photon for geocoding (nominatim was rate-limiting the server), osrm for routing
+PHOTON = "https://photon.komoot.io/api/"
+OSRM   = "http://router.project-osrm.org/route/v1/driving"
 
 MAX_DRIVING  = 11.0
 DRIVE_WINDOW = 14.0
@@ -27,28 +26,23 @@ def _mi(meters: float) -> float:
 
 
 def geocode(loc: str):
-    for attempt in range(3):
-        try:
-            r = requests.get(
-                NOMINATIM,
-                params={"q": loc, "format": "json", "limit": 1},
-                headers={"User-Agent": "ELDTripPlanner/1.0 (demo)"},
-                timeout=12,
-            )
-            if r.status_code == 429:
-                time.sleep(2 ** attempt)
-                continue
-            r.raise_for_status()
-            data = r.json()
-            if not data:
-                raise ValueError(f"couldn't find '{loc}' — try adding a state or country")
-            item = data[0]
-            return float(item["lat"]), float(item["lon"]), item.get("display_name", loc)
-        except requests.RequestException as exc:
-            if attempt == 2:
-                raise ValueError(f"geocoding failed: {exc}")
-            time.sleep(1)
-    raise ValueError(f"geocoding failed for '{loc}' after retries")
+    try:
+        r = requests.get(
+            PHOTON,
+            params={"q": loc, "limit": 1},
+            timeout=12,
+        )
+        r.raise_for_status()
+        data = r.json()
+        features = data.get("features", [])
+        if not features:
+            raise ValueError(f"couldn't find '{loc}' — try adding a state or country")
+        coords = features[0]["geometry"]["coordinates"]
+        props = features[0]["properties"]
+        name = ", ".join(filter(None, [props.get("name"), props.get("state"), props.get("country")]))
+        return float(coords[1]), float(coords[0]), name or loc
+    except requests.RequestException as exc:
+        raise ValueError(f"geocoding failed: {exc}")
 
 
 def get_route(start: tuple, end: tuple):
@@ -81,9 +75,7 @@ def get_route(start: tuple, end: tuple):
 def plan_trip(current_location: str, pickup_location: str,
               dropoff_location: str, cycle_hours_used: float) -> dict:
     clat, clon, cname = geocode(current_location)
-    time.sleep(1)
     plat, plon, pname = geocode(pickup_location)
-    time.sleep(1)
     dlat, dlon, dname = geocode(dropoff_location)
 
     d1, t1, g1 = get_route((clat, clon), (plat, plon))
